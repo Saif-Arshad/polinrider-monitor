@@ -1,4 +1,4 @@
-# Runtime/state files - not for source control
+﻿# Runtime/state files - not for source control
 config.json
 history.json
 monitor.log

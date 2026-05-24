@@ -1,6 +1,8 @@
-# PolinRider Monitor
+﻿# PolinRider Monitor
 
 A free, open-source desktop tool for Windows that detects and removes the **PolinRider / BeaverTail** JavaScript supply-chain malware (DPRK Lazarus) on your machine and in your git working trees.
+
+![PolinRider Monitor Dashboard](docs/screenshots/dashboard.png)
 
 If you've ever cloned a JavaScript or TypeScript project from GitHub, you can be infected without knowing it. PolinRider hides obfuscated JavaScript at the end of common config files like `postcss.config.mjs`, `tailwind.config.js`, `next.config.mjs`, `vite.config.js`, Express route files, and Flutter `canvaskit.js` bundles. When you run `npm install` or `npm run dev`, the payload executes — and starts force-pushing the same malware to every GitHub repo your credentials can reach.
 

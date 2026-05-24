@@ -1,4 +1,4 @@
-# PolinRider Monitor - installer
+﻿# PolinRider Monitor - installer
 # Creates a Desktop shortcut and initialises config.json with sensible defaults.
 # Safe to re-run; updates the shortcut to the current location.
 

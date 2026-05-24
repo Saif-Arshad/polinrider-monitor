@@ -1,4 +1,4 @@
-# PolinRider Monitor - uninstaller
+﻿# PolinRider Monitor - uninstaller
 # Removes the Desktop shortcut and any scheduled task. Does NOT delete the
 # app files or your scan history.
 
