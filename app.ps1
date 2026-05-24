@@ -29,6 +29,17 @@ $global:payloadStart = -join ([char[]]@(103,108,111,98,97,108,91,39,33,39,93))
 $global:scanLog = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
 $global:lastLogIndex = 0
 
+# Shared scan state (updated by runspace, polled by UI for live progress + stop)
+$global:scanState = [hashtable]::Synchronized(@{
+    Files     = 0
+    Folder    = ''
+    Cancelled = $false
+})
+$global:scanStartTime   = $null
+$global:currentScanPs   = $null
+$global:currentScanRs   = $null
+$global:currentScanTimer= $null
+
 # Default config
 $defaultConfig = [ordered]@{
     ScanPaths = @(
@@ -98,6 +109,8 @@ $global:config = Load-Config
         <Geometry x:Key="IconPlus">M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z</Geometry>
         <Geometry x:Key="IconTrash">M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z</Geometry>
         <Geometry x:Key="IconSave">M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z</Geometry>
+        <Geometry x:Key="IconStop">M18,18H6V6H18V18Z</Geometry>
+        <Geometry x:Key="IconClock">M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12.5,7H11V13L16.25,16.15L17,14.92L12.5,12.25V7Z</Geometry>
         <Geometry x:Key="IconGithub">M12,2A10,10 0 0,0 2,12C2,16.42 4.87,20.17 8.84,21.5C9.34,21.58 9.5,21.27 9.5,21C9.5,20.77 9.5,20.14 9.5,19.31C6.73,19.91 6.14,17.97 6.14,17.97C5.68,16.81 5.03,16.5 5.03,16.5C4.12,15.88 5.1,15.9 5.1,15.9C6.1,15.97 6.63,16.93 6.63,16.93C7.5,18.45 8.97,18 9.54,17.76C9.63,17.11 9.89,16.67 10.17,16.42C7.95,16.17 5.62,15.31 5.62,11.5C5.62,10.39 6,9.5 6.65,8.79C6.55,8.54 6.2,7.5 6.75,6.15C6.75,6.15 7.59,5.88 9.5,7.17C10.29,6.95 11.15,6.84 12,6.84C12.85,6.84 13.71,6.95 14.5,7.17C16.41,5.88 17.25,6.15 17.25,6.15C17.8,7.5 17.45,8.54 17.35,8.79C18,9.5 18.38,10.39 18.38,11.5C18.38,15.32 16.04,16.16 13.81,16.41C14.17,16.72 14.5,17.33 14.5,18.26C14.5,19.6 14.5,20.68 14.5,21C14.5,21.27 14.66,21.59 15.17,21.5C19.14,20.16 22,16.42 22,12A10,10 0 0,0 12,2Z</Geometry>
         <Geometry x:Key="IconFolder">M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z</Geometry>
 
@@ -327,35 +340,17 @@ $global:config = Load-Config
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
                 <!-- Page title -->
                 <StackPanel Grid.Row="0" Margin="0,0,0,20">
                     <TextBlock Text="Dashboard" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
-                    <TextBlock Text="Scan summary and quick actions" FontSize="12" Foreground="{StaticResource TextSec}" Margin="0,4,0,0"/>
+                    <TextBlock Name="DashSubtitle" Text="Scan summary and quick actions" FontSize="12" Foreground="{StaticResource TextSec}" Margin="0,4,0,0"/>
                 </StackPanel>
 
-                <!-- Status banner -->
-                <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,0,20" Name="StatusBanner">
-                    <Grid Margin="28,24">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <Border Grid.Column="0" Width="56" Height="56" CornerRadius="28" Name="StatusIconBorder" Background="{StaticResource Slate}" VerticalAlignment="Center">
-                            <Path Name="StatusIcon" Data="{StaticResource IconShield}" Fill="White" Stretch="Uniform" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <StackPanel Grid.Column="1" Margin="20,0,0,0" VerticalAlignment="Center">
-                            <TextBlock Name="StatusText" Text="Ready" FontSize="22" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
-                            <TextBlock Name="StatusDetail" Text="Click 'Scan Now' to begin" FontSize="13" Foreground="{StaticResource TextSec}" Margin="0,4,0,0"/>
-                        </StackPanel>
-                    </Grid>
-                </Border>
-
                 <!-- Stats cards -->
-                <Grid Grid.Row="2" Margin="0,0,0,20">
+                <Grid Grid.Row="1" Margin="0,0,0,20">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
@@ -388,25 +383,90 @@ $global:config = Load-Config
                     </Border>
                 </Grid>
 
-                <!-- Buttons -->
-                <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,20">
-                    <Button Name="BtnScan" Style="{StaticResource PrimaryButton}" Margin="0,0,10,0">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Data="{StaticResource IconSearch}" Style="{StaticResource IconBtn}"/>
-                            <TextBlock Text="Scan Now" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Button>
-                    <Button Name="BtnClean" Style="{StaticResource WarningButton}" IsEnabled="False">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Data="{StaticResource IconBroom}" Style="{StaticResource IconBtn}"/>
-                            <TextBlock Text="Clean Infections" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Button>
-                    <ProgressBar Name="ScanProgress" Height="44" Width="200" Margin="14,0,0,0" Visibility="Collapsed" IsIndeterminate="True" Background="{StaticResource Card}" Foreground="{StaticResource Blue}" BorderThickness="0"/>
+                <!-- Buttons + progress -->
+                <StackPanel Grid.Row="2" Margin="0,0,0,20">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Name="BtnScan" Style="{StaticResource PrimaryButton}" Margin="0,0,10,0">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Data="{StaticResource IconSearch}" Style="{StaticResource IconBtn}"/>
+                                <TextBlock Text="Scan Now" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Name="BtnStop" Style="{StaticResource DangerButton}" Margin="0,0,10,0" Visibility="Collapsed">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Data="{StaticResource IconStop}" Style="{StaticResource IconBtn}"/>
+                                <TextBlock Text="Stop Scan" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Name="BtnClean" Style="{StaticResource WarningButton}" IsEnabled="False">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Data="{StaticResource IconBroom}" Style="{StaticResource IconBtn}"/>
+                                <TextBlock Text="Clean Infections" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Progress card (visible only during scan) -->
+                    <Border Name="ProgressPanel" Style="{StaticResource CardStyle}" Margin="0,16,0,0" Visibility="Collapsed">
+                        <Grid Margin="22,18">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Circular loader -->
+                            <Grid Grid.Row="0" Grid.Column="0" Width="38" Height="38" VerticalAlignment="Center">
+                                <Ellipse Stroke="#1E293B" StrokeThickness="3"/>
+                                <Ellipse Stroke="{StaticResource Blue}" StrokeThickness="3" StrokeDashArray="9 27" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5">
+                                    <Ellipse.RenderTransform>
+                                        <RotateTransform Angle="0"/>
+                                    </Ellipse.RenderTransform>
+                                    <Ellipse.Triggers>
+                                        <EventTrigger RoutedEvent="Loaded">
+                                            <BeginStoryboard>
+                                                <Storyboard RepeatBehavior="Forever">
+                                                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" From="0" To="360" Duration="0:0:1"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </EventTrigger>
+                                    </Ellipse.Triggers>
+                                </Ellipse>
+                            </Grid>
+                            <StackPanel Grid.Row="0" Grid.Column="1" VerticalAlignment="Center" Margin="14,0,0,0">
+                                <TextBlock Name="ProgressLabel" Text="Scanning..." FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPri}"/>
+                                <TextBlock Name="ProgressStartedAt" Text="" FontSize="11" Foreground="{StaticResource TextMuted}" Margin="0,2,0,0"/>
+                            </StackPanel>
+
+                            <!-- File count and elapsed time -->
+                            <StackPanel Grid.Row="0" Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="20,0,16,0">
+                                <TextBlock Name="ProgressFiles" Text="0 files" FontFamily="Consolas" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPri}" TextAlignment="Right"/>
+                                <TextBlock Text="scanned" FontSize="10" Foreground="{StaticResource TextMuted}" TextAlignment="Right" Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Row="0" Grid.Column="3" VerticalAlignment="Center" HorizontalAlignment="Right">
+                                <TextBlock Name="ProgressElapsed" Text="00:00" FontFamily="Consolas" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource TextPri}" TextAlignment="Right"/>
+                                <TextBlock Text="elapsed" FontSize="10" Foreground="{StaticResource TextMuted}" TextAlignment="Right" Margin="0,2,0,0"/>
+                            </StackPanel>
+
+                            <!-- Indeterminate bar with rounded corners -->
+                            <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Height="6" CornerRadius="3" Background="#0F172A" Margin="0,14,0,0" ClipToBounds="True">
+                                <ProgressBar Name="ScanProgress" IsIndeterminate="True" Background="Transparent" Foreground="{StaticResource Blue}" BorderThickness="0"/>
+                            </Border>
+
+                            <!-- Current folder -->
+                            <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4" Name="ProgressFolder" Text="" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource TextSec}" Margin="0,10,0,0" TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </Border>
                 </StackPanel>
 
                 <!-- History -->
-                <Border Grid.Row="4" Style="{StaticResource CardStyle}">
+                <Border Grid.Row="3" Name="HistoryCard" Style="{StaticResource CardStyle}">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -416,18 +476,83 @@ $global:config = Load-Config
                             <TextBlock Text="Scan history" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPri}"/>
                             <TextBlock Name="HistoryCount" Text="" FontSize="12" Foreground="{StaticResource TextMuted}" Margin="10,2,0,0"/>
                         </StackPanel>
-                        <ListView Grid.Row="1" Name="History" Margin="6,0,6,6">
-                            <ListView.View>
-                                <GridView>
-                                    <GridViewColumn Header="WHEN" Width="160" DisplayMemberBinding="{Binding When}"/>
-                                    <GridViewColumn Header="RESULT" Width="110" DisplayMemberBinding="{Binding Result}"/>
-                                    <GridViewColumn Header="FILES" Width="90" DisplayMemberBinding="{Binding Files}"/>
-                                    <GridViewColumn Header="INFECTED" Width="90" DisplayMemberBinding="{Binding Infected}"/>
-                                    <GridViewColumn Header="PROCS" Width="80" DisplayMemberBinding="{Binding Procs}"/>
-                                    <GridViewColumn Header="C2" Width="60" DisplayMemberBinding="{Binding C2}"/>
-                                    <GridViewColumn Header="TIME" Width="80" DisplayMemberBinding="{Binding Duration}"/>
-                                </GridView>
-                            </ListView.View>
+                        <ListView Grid.Row="1" Name="History" Margin="8,0,8,8" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="Background" Value="Transparent"/>
+                                    <Setter Property="BorderThickness" Value="0"/>
+                                    <Setter Property="Padding" Value="0"/>
+                                    <Setter Property="Margin" Value="0,0,0,8"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="Focusable" Value="False"/>
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="18,14" CornerRadius="8" Background="#162133" BorderBrush="#1F2A3D" BorderThickness="1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+
+                                            <!-- date/time -->
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding When}" FontFamily="Consolas" FontSize="13" FontWeight="SemiBold" Foreground="#F1F5F9" VerticalAlignment="Center"/>
+
+                                            <!-- result badge -->
+                                            <Border Grid.Row="0" Grid.Column="1" CornerRadius="10" Padding="10,3" Margin="12,0,12,0" VerticalAlignment="Center">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="#475569"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Result}" Value="CLEAN">
+                                                                <Setter Property="Background" Value="#10B981"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Result}" Value="INFECTED">
+                                                                <Setter Property="Background" Value="#EF4444"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Result}" Value="STOPPED">
+                                                                <Setter Property="Background" Value="#64748B"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding Result}" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                                            </Border>
+
+                                            <!-- duration -->
+                                            <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Path Data="{StaticResource IconClock}" Fill="#64748B" Stretch="Uniform" Width="13" Height="13" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Duration}" FontFamily="Consolas" FontSize="12" Foreground="#94A3B8" VerticalAlignment="Center"/>
+                                            </StackPanel>
+
+                                            <!-- stats line -->
+                                            <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Margin="0,8,0,0">
+                                                <TextBlock FontSize="12">
+                                                    <Run Text="{Binding Files}" Foreground="#F1F5F9" FontWeight="SemiBold"/><Run Text=" files" Foreground="#94A3B8"/>
+                                                </TextBlock>
+                                                <TextBlock Text="·" FontSize="13" Foreground="#475569" Margin="10,0"/>
+                                                <TextBlock FontSize="12">
+                                                    <Run Text="{Binding Infected}" Foreground="#F1F5F9" FontWeight="SemiBold"/><Run Text=" infected" Foreground="#94A3B8"/>
+                                                </TextBlock>
+                                                <TextBlock Text="·" FontSize="13" Foreground="#475569" Margin="10,0"/>
+                                                <TextBlock FontSize="12">
+                                                    <Run Text="{Binding Procs}" Foreground="#F1F5F9" FontWeight="SemiBold"/><Run Text=" procs" Foreground="#94A3B8"/>
+                                                </TextBlock>
+                                                <TextBlock Text="·" FontSize="13" Foreground="#475569" Margin="10,0"/>
+                                                <TextBlock FontSize="12">
+                                                    <Run Text="{Binding C2}" Foreground="#F1F5F9" FontWeight="SemiBold"/><Run Text=" C2" Foreground="#94A3B8"/>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
                         </ListView>
                     </Grid>
                 </Border>
@@ -447,6 +572,34 @@ $global:config = Load-Config
                 </StackPanel>
 
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,12">
+                    <!-- Scanning indicator (visible only during scan) -->
+                    <StackPanel Name="LogsScanningIndicator" Orientation="Horizontal" Visibility="Collapsed" Margin="0,0,12,0" VerticalAlignment="Center">
+                        <Grid Width="22" Height="22" VerticalAlignment="Center" Margin="0,0,10,0">
+                            <Ellipse Stroke="#1E293B" StrokeThickness="2.5"/>
+                            <Ellipse Stroke="{StaticResource Blue}" StrokeThickness="2.5" StrokeDashArray="6 18" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform>
+                                    <RotateTransform Angle="0"/>
+                                </Ellipse.RenderTransform>
+                                <Ellipse.Triggers>
+                                    <EventTrigger RoutedEvent="Loaded">
+                                        <BeginStoryboard>
+                                            <Storyboard RepeatBehavior="Forever">
+                                                <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" From="0" To="360" Duration="0:0:1"/>
+                                            </Storyboard>
+                                        </BeginStoryboard>
+                                    </EventTrigger>
+                                </Ellipse.Triggers>
+                            </Ellipse>
+                        </Grid>
+                        <TextBlock Text="Scan in progress" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPri}" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <Button Name="BtnStopLogs" Style="{StaticResource DangerButton}" Margin="0,0,8,0" Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource IconStop}" Style="{StaticResource IconBtn}"/>
+                            <TextBlock Text="Stop Scan" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                     <Button Name="BtnClearLog" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0">
                         <StackPanel Orientation="Horizontal">
                             <Path Data="{StaticResource IconTrash}" Style="{StaticResource IconBtn}"/>
@@ -674,9 +827,11 @@ $elementNames = @(
     'NavDashIcon','NavLogsIcon','NavSettingsIcon','NavAboutIcon',
     'SidebarHost','SidebarVersion',
     'PageDashboard','PageLogs','PageSettings','PageAbout',
-    'StatusBanner','StatusIconBorder','StatusIcon','StatusText','StatusDetail',
+    'DashSubtitle',
     'StatFiles','StatInfected','StatProcs','StatC2',
-    'BtnScan','BtnClean','ScanProgress',
+    'BtnScan','BtnStop','BtnClean','ScanProgress',
+    'ProgressPanel','ProgressLabel','ProgressStartedAt','ProgressFiles','ProgressElapsed','ProgressFolder',
+    'HistoryCard','LogsScanningIndicator','BtnStopLogs',
     'History','HistoryCount',
     'LogText','LogScroller','BtnClearLog','BtnOpenLogFile',
     'PathsList','BtnAddPath','BtnRemovePath','MaxFileSizeInput','AutoScanCheck','BtnSaveSettings','SettingsStatus',
@@ -690,7 +845,7 @@ $ui.AboutVersion.Text   = "Version $version"
 
 # === Helpers ===
 function Write-File-Log($msg) {
-    $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
+    $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd hh:mm:ss tt'), $msg
     Add-Content -LiteralPath $logFile -Value $line -Encoding utf8
 }
 
@@ -701,49 +856,68 @@ function Append-LiveLog([string]$line) {
 
 function Load-History {
     if (-not (Test-Path $historyFile)) { return @() }
-    try { return @(Get-Content $historyFile -Raw | ConvertFrom-Json) } catch { return @() }
+    try {
+        $raw = Get-Content $historyFile -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return @() }
+        $data = $raw | ConvertFrom-Json -ErrorAction Stop
+        # ConvertFrom-Json returns a single object for 1-element JSON. Force array.
+        return @($data)
+    } catch { return @() }
 }
 
 function Save-History($entry) {
+    # Normalise the new entry to PSCustomObject so the array is type-consistent
+    $obj = [pscustomobject]@{
+        When          = "$($entry.When)"
+        Files         = [int]$entry.Files
+        Infected      = [int]$entry.Infected
+        Procs         = [int]$entry.Procs
+        C2            = [int]$entry.C2
+        Duration      = "$($entry.Duration)"
+        Result        = "$($entry.Result)"
+        InfectedFiles = @($entry.InfectedFiles)
+        ProcIds       = @($entry.ProcIds)
+        C2Hits        = @($entry.C2Hits)
+    }
     $hist = @(Load-History)
-    $hist = @($entry) + $hist
+    $hist = @($obj) + $hist
     if ($hist.Count -gt 50) { $hist = $hist[0..49] }
-    $hist | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $historyFile -Encoding utf8
+    # -InputObject bypasses pipeline unrolling so a 1-element array still writes as [ {...} ]
+    $json = ConvertTo-Json -InputObject @($hist) -Depth 6
+    Set-Content -LiteralPath $historyFile -Value $json -Encoding utf8
 }
 
-function Set-Status([string]$state, [string]$detail) {
-    $bc = [System.Windows.Media.BrushConverter]::new()
-    switch ($state) {
-        'clean'    { $ui.StatusIconBorder.Background = $bc.ConvertFrom('#10B981'); $ui.StatusIcon.Data = $window.Resources['IconShieldCheck']; $ui.StatusText.Text = 'Clean' }
-        'infected' { $ui.StatusIconBorder.Background = $bc.ConvertFrom('#EF4444'); $ui.StatusIcon.Data = $window.Resources['IconShieldAlert']; $ui.StatusText.Text = 'Infections detected' }
-        'scanning' { $ui.StatusIconBorder.Background = $bc.ConvertFrom('#3B82F6'); $ui.StatusIcon.Data = $window.Resources['IconLoading'];      $ui.StatusText.Text = 'Scanning...' }
-        'error'    { $ui.StatusIconBorder.Background = $bc.ConvertFrom('#F59E0B'); $ui.StatusIcon.Data = $window.Resources['IconShieldAlert']; $ui.StatusText.Text = 'Error' }
-        default    { $ui.StatusIconBorder.Background = $bc.ConvertFrom('#475569'); $ui.StatusIcon.Data = $window.Resources['IconShield'];      $ui.StatusText.Text = 'Ready' }
-    }
-    $ui.StatusDetail.Text = $detail
-}
+# (Status banner removed - dashboard subtitle is the only status text now)
 
 function Refresh-Dashboard {
-    $hist = Load-History
-    $ui.History.ItemsSource = @($hist)
-    $ui.HistoryCount.Text = "($($hist.Count) entries)"
-    if ($hist.Count -gt 0) {
-        $latest = $hist[0]
-        $isClean = ($latest.Infected -eq 0 -and $latest.Procs -eq 0 -and $latest.C2 -eq 0)
-        if ($isClean) {
-            Set-Status 'clean' "Last scanned $($latest.When)  ·  $($latest.Files) files in $($latest.Duration)"
+    try {
+        $hist = @(Load-History)
+        $ui.History.ItemsSource = $hist
+        $ui.HistoryCount.Text = "($($hist.Count) entries)"
+        if ($hist.Count -gt 0) {
+            $latest   = $hist[0]
+            $infected = [int]$latest.Infected
+            $procs    = [int]$latest.Procs
+            $c2       = [int]$latest.C2
+            $files    = [int]$latest.Files
+            $isClean  = ($infected -eq 0 -and $procs -eq 0 -and $c2 -eq 0)
+            if ($isClean) {
+                $ui.DashSubtitle.Text = "Last scan: $($latest.Result)  -  $($latest.When)  -  $files files in $($latest.Duration)"
+            } else {
+                $ui.DashSubtitle.Text = "Last scan: $($latest.Result)  -  $($latest.When)  -  click 'Clean Infections' to fix"
+            }
+            $ui.StatFiles.Text     = "$files"
+            $ui.StatInfected.Text  = "$infected"
+            $ui.StatProcs.Text     = "$procs"
+            $ui.StatC2.Text        = "$c2"
+            $ui.BtnClean.IsEnabled = (-not $isClean)
         } else {
-            Set-Status 'infected' "Last scanned $($latest.When)  ·  click 'Clean Infections' to fix"
+            $ui.DashSubtitle.Text = "Scan summary and quick actions"
+            $ui.StatFiles.Text='-'; $ui.StatInfected.Text='-'; $ui.StatProcs.Text='-'; $ui.StatC2.Text='-'
+            $ui.BtnClean.IsEnabled = $false
         }
-        $ui.StatFiles.Text    = "$($latest.Files)"
-        $ui.StatInfected.Text = "$($latest.Infected)"
-        $ui.StatProcs.Text    = "$($latest.Procs)"
-        $ui.StatC2.Text       = "$($latest.C2)"
-        $ui.BtnClean.IsEnabled = (-not $isClean)
-    } else {
-        Set-Status 'ready' "Click 'Scan Now' to begin"
-        $ui.StatFiles.Text='-'; $ui.StatInfected.Text='-'; $ui.StatProcs.Text='-'; $ui.StatC2.Text='-'
-        $ui.BtnClean.IsEnabled = $false
+    } catch {
+        Append-LiveLog ("[refresh error] " + $_.Exception.Message)
     }
 }
 
@@ -773,16 +947,30 @@ function Show-Page([string]$name) {
 
 # === Scan ===
 function Run-Scan {
-    Set-Status 'scanning' "Running scan - switch to Logs tab to watch live progress"
-    $ui.BtnScan.IsEnabled = $false
+    $ui.DashSubtitle.Text = "Scan in progress - switch to Logs tab to watch live output"
+    $ui.BtnScan.Visibility = 'Collapsed'
+    $ui.BtnStop.Visibility = 'Visible'
     $ui.BtnClean.IsEnabled = $false
-    $ui.ScanProgress.Visibility = 'Visible'
+    $ui.ProgressPanel.Visibility = 'Visible'
+    $ui.HistoryCard.Visibility = 'Collapsed'
+    $ui.LogsScanningIndicator.Visibility = 'Visible'
+    $ui.BtnStopLogs.Visibility = 'Visible'
+    $ui.BtnStopLogs.IsEnabled = $true
 
-    # Reset live log
+    # Reset shared state
+    $global:scanStartTime = Get-Date
+    $global:scanState.Files = 0
+    $global:scanState.Folder = ''
+    $global:scanState.Cancelled = $false
     $global:scanLog.Clear()
     $global:lastLogIndex = 0
     $ui.LogText.Text = ""
-    Append-LiveLog ("=== scan started {0} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+    $ui.ProgressFiles.Text = "0 files"
+    $ui.ProgressElapsed.Text = "00:00"
+    $ui.ProgressFolder.Text = ""
+    $ui.ProgressLabel.Text = "Scanning..."
+    $ui.ProgressStartedAt.Text = "Started at $($global:scanStartTime.ToString('hh:mm:ss tt'))"
+    Append-LiveLog ("=== scan started {0} ===" -f $global:scanStartTime.ToString('yyyy-MM-dd hh:mm:ss tt'))
 
     $rs = [runspacefactory]::CreateRunspace()
     $rs.ApartmentState = 'STA'; $rs.ThreadOptions = 'ReuseThread'; $rs.Open()
@@ -793,26 +981,32 @@ function Run-Scan {
     $rs.SessionStateProxy.SetVariable('scanPaths', @($global:config.ScanPaths))
     $rs.SessionStateProxy.SetVariable('maxSize', $global:config.MaxFileSize)
     $rs.SessionStateProxy.SetVariable('scanLog', $global:scanLog)
+    $rs.SessionStateProxy.SetVariable('scanState', $global:scanState)
 
     $ps = [PowerShell]::Create(); $ps.Runspace = $rs
     [void]$ps.AddScript({
-        function L($msg) { [void]$scanLog.Add("$((Get-Date).ToString('HH:mm:ss')) $msg") }
+        function L($msg) { [void]$scanLog.Add("$((Get-Date).ToString('hh:mm:ss tt')) $msg") }
         $markers = @($m1, $m2, $m3, $m4)
         $c2IPs = @('166.88.54.158','54.251.176.6','52.221.63.237','18.142.149.167','34.36.29.190','52.223.34.155','35.71.137.105')
         $start = Get-Date
         $infectedFiles = @(); $totalScanned = 0
+        $cancelled = $false
 
         L "=== file scan ==="
-        foreach ($path in $scanPaths) {
+        :outer foreach ($path in $scanPaths) {
+            if ($scanState.Cancelled) { $cancelled = $true; break }
             if (-not (Test-Path $path)) {
                 L "[skip] not found: $path"
                 continue
             }
+            $scanState.Folder = $path
             $files = Get-ChildItem -Path $path -Recurse -Force -Include "*.js","*.mjs","*.cjs","*.jsx","*.ts","*.tsx" -ErrorAction SilentlyContinue |
                 Where-Object { $_.FullName -notmatch '\\node_modules\\' -and $_.Length -lt $maxSize }
             L (">> {0}  ({1} files)" -f $path, $files.Count)
             foreach ($f in $files) {
+                if ($scanState.Cancelled) { $cancelled = $true; break outer }
                 $totalScanned++
+                $scanState.Files = $totalScanned
                 $rel = $f.FullName.Substring($path.Length).TrimStart('\','/')
                 if ($rel.Length -gt 80) { $rel = "..." + $rel.Substring($rel.Length - 77) }
                 try {
@@ -833,28 +1027,30 @@ function Run-Scan {
             }
         }
 
-        L "=== process scan ==="
-        $evalMarker = -join ([char[]]@(103,108,111,98,97,108,91))
-        $badProcs = @(Get-WmiObject Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and ($_.CommandLine.IndexOf($evalMarker) -ge 0) -and ($_.CommandLine -match ' -e |--eval') })
-        $procIds = @($badProcs | ForEach-Object { $_.ProcessId })
-        if ($procIds.Count -eq 0) { L "no suspicious node.exe processes" } else { foreach ($p in $badProcs) { L ("   [PROC] PID {0}" -f $p.ProcessId) } }
+        $procIds = @(); $c2Hits = @()
+        if (-not $cancelled) {
+            L "=== process scan ==="
+            $evalMarker = -join ([char[]]@(103,108,111,98,97,108,91))
+            $badProcs = @(Get-WmiObject Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -and ($_.CommandLine.IndexOf($evalMarker) -ge 0) -and ($_.CommandLine -match ' -e |--eval') })
+            $procIds = @($badProcs | ForEach-Object { $_.ProcessId })
+            if ($procIds.Count -eq 0) { L "no suspicious node.exe processes" } else { foreach ($p in $badProcs) { L ("   [PROC] PID {0}" -f $p.ProcessId) } }
 
-        L "=== c2 connection scan ==="
-        $c2Hits = @()
-        foreach ($ip in $c2IPs) {
-            $conns = Get-NetTCPConnection -RemoteAddress $ip -ErrorAction SilentlyContinue
-            foreach ($cn in $conns) { $c2Hits += "$ip <- PID $($cn.OwningProcess)"; L ("   [CONN] {0}" -f $c2Hits[-1]) }
+            L "=== c2 connection scan ==="
+            foreach ($ip in $c2IPs) {
+                $conns = Get-NetTCPConnection -RemoteAddress $ip -ErrorAction SilentlyContinue
+                foreach ($cn in $conns) { $c2Hits += "$ip <- PID $($cn.OwningProcess)"; L ("   [CONN] {0}" -f $c2Hits[-1]) }
+            }
+            if ($c2Hits.Count -eq 0) { L "no active C2 connections" }
         }
-        if ($c2Hits.Count -eq 0) { L "no active C2 connections" }
 
         $elapsed = (Get-Date) - $start
-        $result = if ($infectedFiles.Count -eq 0 -and $procIds.Count -eq 0 -and $c2Hits.Count -eq 0) { 'CLEAN' } else { 'INFECTED' }
+        $result = if ($cancelled) { 'STOPPED' } elseif ($infectedFiles.Count -eq 0 -and $procIds.Count -eq 0 -and $c2Hits.Count -eq 0) { 'CLEAN' } else { 'INFECTED' }
         L ""
-        L ("=== scan complete: {0}  ({1} files in {2:N1}s) ===" -f $result, $totalScanned, $elapsed.TotalSeconds)
+        L ("=== scan {0}: {1} files in {2:N1}s ===" -f $result.ToLower(), $totalScanned, $elapsed.TotalSeconds)
 
         @{
-            When     = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+            When     = (Get-Date -Format 'yyyy-MM-dd hh:mm:ss tt')
             Files    = $totalScanned
             Infected = $infectedFiles.Count
             Procs    = $procIds.Count
@@ -866,59 +1062,149 @@ function Run-Scan {
             C2Hits   = $c2Hits
         }
     })
-    $handle = $ps.BeginInvoke()
+    $global:currentScanPs     = $ps
+    $global:currentScanRs     = $rs
+    $global:currentScanHandle = $ps.BeginInvoke()
 
     $timer = New-Object System.Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromMilliseconds(300)
     $timer.Add_Tick({
-        while ($global:lastLogIndex -lt $global:scanLog.Count) {
-            $entry = $global:scanLog[$global:lastLogIndex]
-            Append-LiveLog $entry
-            $global:lastLogIndex++
-        }
-        if ($handle.IsCompleted) {
-            $timer.Stop()
-            $result = $ps.EndInvoke($handle)[0]
-            $ps.Dispose(); $rs.Close()
-            $ui.ScanProgress.Visibility = 'Collapsed'
-            $ui.BtnScan.IsEnabled = $true
-            Save-History $result
-            Write-File-Log "Scan: $($result.Result) - files=$($result.Files) infected=$($result.Infected) procs=$($result.Procs) c2=$($result.C2) duration=$($result.Duration)"
-            Refresh-Dashboard
+        try {
+            # Drain live log
+            while ($global:lastLogIndex -lt $global:scanLog.Count) {
+                $entry = $global:scanLog[$global:lastLogIndex]
+                Append-LiveLog $entry
+                $global:lastLogIndex++
+            }
+
+            # Live progress
+            if ($global:scanStartTime) {
+                $el = (Get-Date) - $global:scanStartTime
+                $ui.ProgressElapsed.Text = "{0:00}:{1:00}" -f [int]$el.TotalMinutes, $el.Seconds
+                $ui.ProgressFiles.Text = "{0:N0} files" -f $global:scanState.Files
+                if ($global:scanState.Folder) {
+                    $ui.ProgressFolder.Text = "current: " + $global:scanState.Folder
+                }
+            }
+
+            # Completion check (uses globals so closure access is reliable)
+            if ($global:currentScanHandle -and $global:currentScanHandle.IsCompleted) {
+                $h  = $global:currentScanHandle
+                $sp = $global:currentScanPs
+                $sr = $global:currentScanRs
+                $tm = $global:currentScanTimer
+
+                # Clear globals first so we never re-enter completion
+                $global:currentScanHandle = $null
+                $global:currentScanPs     = $null
+                $global:currentScanRs     = $null
+                $global:currentScanTimer  = $null
+
+                if ($tm) { $tm.Stop() }
+
+                $result = $null
+                try { $result = $sp.EndInvoke($h)[0] } catch { Append-LiveLog ("error retrieving result: " + $_.Exception.Message) }
+                try { $sp.Dispose() } catch {}
+                try { $sr.Close() }   catch {}
+
+                # Reset UI - dashboard
+                $ui.ProgressPanel.Visibility   = 'Collapsed'
+                $ui.BtnScan.Visibility         = 'Visible'
+                $ui.BtnStop.Visibility         = 'Collapsed'
+                $ui.BtnStop.IsEnabled          = $true
+                $ui.HistoryCard.Visibility     = 'Visible'
+                # Reset UI - logs
+                $ui.LogsScanningIndicator.Visibility = 'Collapsed'
+                $ui.BtnStopLogs.Visibility           = 'Collapsed'
+                $ui.BtnStopLogs.IsEnabled            = $true
+
+                if ($result) {
+                    if ($result.Result -ne 'STOPPED') { Save-History $result }
+                    Write-File-Log "Scan: $($result.Result) - files=$($result.Files) infected=$($result.Infected) procs=$($result.Procs) c2=$($result.C2) duration=$($result.Duration)"
+                }
+                Refresh-Dashboard
+            }
+        } catch {
+            Append-LiveLog ("[timer error] " + $_.Exception.Message)
         }
     })
+    $global:currentScanTimer = $timer
     $timer.Start()
+}
+
+# === Stop the running scan (cooperative cancellation) ===
+function Stop-Scan {
+    if (-not $global:currentScanPs) { return }
+    $global:scanState.Cancelled = $true
+    $ui.ProgressLabel.Text = "Stopping..."
+    $ui.BtnStop.IsEnabled = $false
+    $ui.BtnStopLogs.IsEnabled = $false
+    Append-LiveLog ("=== stop requested at {0} ===" -f (Get-Date -Format 'hh:mm:ss tt'))
 }
 
 # === Clean ===
 function Clean-Infections {
-    $hist = Load-History
+    $hist = @(Load-History)
     if ($hist.Count -eq 0) { return }
     $latest = $hist[0]
     $cleaned = 0; $failed = 0; $killed = 0
 
-    if ($latest.InfectedFiles -and $latest.InfectedFiles.Count -gt 0) {
-        foreach ($f in $latest.InfectedFiles) {
-            if (-not (Test-Path $f)) { $failed++; continue }
-            try {
-                $c = Get-Content -LiteralPath $f -Raw
-                $c = $c -replace "import \{ createRequire \} from 'module';\s*\r?\n", ""
-                $c = $c -replace "const require = createRequire\(import\.meta\.url\);\s*\r?\n", ""
-                $idx = $c.IndexOf($global:payloadStart)
-                if ($idx -ge 0) { $c = $c.Substring(0, $idx).TrimEnd(' ',"`t","`r","`n") + "`r`n" }
-                Set-Content -LiteralPath $f -Value $c -NoNewline -Encoding utf8
-                $cleaned++
-                Append-LiveLog ("{0} [clean] {1}" -f (Get-Date -Format 'HH:mm:ss'), $f)
-            } catch { $failed++ }
+    # @() forces array, even when JSON deserialised to a single string/value
+    $files = @($latest.InfectedFiles | Where-Object { $_ })
+    $pids  = @($latest.ProcIds       | Where-Object { $_ })
+
+    Append-LiveLog ("{0} [clean] starting - {1} file(s), {2} process(es)" -f (Get-Date -Format 'hh:mm:ss tt'), $files.Count, $pids.Count)
+
+    foreach ($f in $files) {
+        if (-not (Test-Path $f)) {
+            Append-LiveLog ("{0} [skip] not found: {1}" -f (Get-Date -Format 'hh:mm:ss tt'), $f)
+            $failed++; continue
+        }
+        try {
+            $c = Get-Content -LiteralPath $f -Raw -ErrorAction Stop
+            $orig = $c.Length
+            $c = $c -replace "import \{ createRequire \} from 'module';\s*\r?\n", ""
+            $c = $c -replace "const require = createRequire\(import\.meta\.url\);\s*\r?\n", ""
+            $idx = $c.IndexOf($global:payloadStart)
+            if ($idx -ge 0) { $c = $c.Substring(0, $idx).TrimEnd(' ',"`t","`r","`n") + "`r`n" }
+            Set-Content -LiteralPath $f -Value $c -NoNewline -Encoding utf8
+            $cleaned++
+            Append-LiveLog ("{0} [clean] {1}  ({2}B -> {3}B)" -f (Get-Date -Format 'hh:mm:ss tt'), $f, $orig, $c.Length)
+        } catch {
+            $failed++
+            Append-LiveLog ("{0} [err] {1}: {2}" -f (Get-Date -Format 'hh:mm:ss tt'), $f, $_.Exception.Message)
         }
     }
-    if ($latest.ProcIds) {
-        foreach ($pidVal in $latest.ProcIds) {
-            try { Stop-Process -Id $pidVal -Force -ErrorAction Stop; $killed++; Append-LiveLog ("{0} [killed PID {1}]" -f (Get-Date -Format 'HH:mm:ss'), $pidVal) } catch { }
+    foreach ($pidVal in $pids) {
+        try {
+            Stop-Process -Id $pidVal -Force -ErrorAction Stop
+            $killed++
+            Append-LiveLog ("{0} [killed PID {1}]" -f (Get-Date -Format 'hh:mm:ss tt'), $pidVal)
+        } catch {
+            Append-LiveLog ("{0} [err] could not kill PID {1}: {2}" -f (Get-Date -Format 'hh:mm:ss tt'), $pidVal, $_.Exception.Message)
         }
     }
+
+    # Mark this scan as cleaned in history so the dashboard reflects it
+    if ($cleaned -gt 0 -or $killed -gt 0) {
+        $hist[0].Result        = 'CLEAN'
+        $hist[0].Infected      = 0
+        $hist[0].Procs         = 0
+        $hist[0].C2            = 0
+        $hist[0].InfectedFiles = @()
+        $hist[0].ProcIds       = @()
+        $hist[0].C2Hits        = @()
+        $json = ConvertTo-Json -InputObject @($hist) -Depth 6
+        Set-Content -LiteralPath $historyFile -Value $json -Encoding utf8
+    }
+
     Write-File-Log "Clean: $cleaned files cleaned, $killed processes killed, $failed failures"
+    Append-LiveLog ("{0} [clean] done - {1} files cleaned, {2} processes killed, {3} failures" -f (Get-Date -Format 'hh:mm:ss tt'), $cleaned, $killed, $failed)
+
+    Refresh-Dashboard
+
     $msg = "Cleaned $cleaned local file(s)" + $(if ($killed -gt 0) { ", killed $killed malicious process(es)" } else { "" }) + ".`n`nNOTE: this fixes LOCAL files only. For any cleaned file in a git repo, run 'git add . && git commit && git push' to fix the remote."
+    if ($failed -gt 0) { $msg += "`n`n$failed file(s) could not be processed (see Logs)." }
     [System.Windows.MessageBox]::Show($msg, "Cleanup complete", "OK", "Information") | Out-Null
 }
 
@@ -960,7 +1246,7 @@ function Save-Settings {
     }
     $cfg | ConvertTo-Json | Set-Content -LiteralPath $configFile -Encoding utf8
     $global:config = $cfg | ConvertTo-Json | ConvertFrom-Json
-    $ui.SettingsStatus.Text = "Saved at $(Get-Date -Format 'HH:mm:ss')"
+    $ui.SettingsStatus.Text = "Saved at $(Get-Date -Format 'hh:mm:ss tt')"
 }
 
 # === Logs page helpers ===
@@ -981,6 +1267,8 @@ $ui.NavSettings.Add_Click({  Load-PathsIntoUi; Show-Page 'Settings' })
 $ui.NavAbout.Add_Click({     Show-Page 'About' })
 
 $ui.BtnScan.Add_Click({ Show-Page 'Logs'; Run-Scan })
+$ui.BtnStop.Add_Click({ Stop-Scan })
+$ui.BtnStopLogs.Add_Click({ Stop-Scan })
 $ui.BtnClean.Add_Click({ Clean-Infections })
 $ui.BtnClearLog.Add_Click({ $ui.LogText.Text = "" })
 $ui.BtnOpenLogFile.Add_Click({
