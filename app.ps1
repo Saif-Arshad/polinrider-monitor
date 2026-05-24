@@ -70,27 +70,27 @@ $global:config = Load-Config
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="PolinRider Monitor"
         Height="780" Width="1180" MinHeight="640" MinWidth="980"
-        Background="#0F172A"
+        Background="#000000"
         WindowStartupLocation="CenterScreen"
         FontFamily="Segoe UI"
         TextOptions.TextFormattingMode="Display">
 
     <Window.Resources>
-        <!-- BRUSHES -->
-        <SolidColorBrush x:Key="Bg"          Color="#0F172A"/>
-        <SolidColorBrush x:Key="Sidebar"     Color="#0B1220"/>
-        <SolidColorBrush x:Key="Card"        Color="#1E293B"/>
-        <SolidColorBrush x:Key="CardBorder"  Color="#334155"/>
-        <SolidColorBrush x:Key="TextPri"     Color="#F1F5F9"/>
-        <SolidColorBrush x:Key="TextSec"     Color="#94A3B8"/>
-        <SolidColorBrush x:Key="TextMuted"   Color="#64748B"/>
-        <SolidColorBrush x:Key="Blue"        Color="#3B82F6"/>
-        <SolidColorBrush x:Key="BlueHover"   Color="#2563EB"/>
+        <!-- BRUSHES (OSM threat-intel theme: pure black + red accent) -->
+        <SolidColorBrush x:Key="Bg"          Color="#000000"/>
+        <SolidColorBrush x:Key="Sidebar"     Color="#0A0A0A"/>
+        <SolidColorBrush x:Key="Card"        Color="#0E0E10"/>
+        <SolidColorBrush x:Key="CardBorder"  Color="#1F1F23"/>
+        <SolidColorBrush x:Key="TextPri"     Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="TextSec"     Color="#A0A0A8"/>
+        <SolidColorBrush x:Key="TextMuted"   Color="#6B7280"/>
+        <SolidColorBrush x:Key="Blue"        Color="#EF4444"/>
+        <SolidColorBrush x:Key="BlueHover"   Color="#DC2626"/>
         <SolidColorBrush x:Key="Green"       Color="#10B981"/>
         <SolidColorBrush x:Key="Amber"       Color="#F59E0B"/>
         <SolidColorBrush x:Key="Red"         Color="#EF4444"/>
-        <SolidColorBrush x:Key="Slate"       Color="#475569"/>
-        <SolidColorBrush x:Key="SlateHover"  Color="#334155"/>
+        <SolidColorBrush x:Key="Slate"       Color="#27272A"/>
+        <SolidColorBrush x:Key="SlateHover"  Color="#3F3F46"/>
         <SolidColorBrush x:Key="MatrixBg"    Color="#020a02"/>
         <SolidColorBrush x:Key="MatrixGreen" Color="#00ff41"/>
         <SolidColorBrush x:Key="MatrixDim"   Color="#008f25"/>
@@ -288,7 +288,7 @@ $global:config = Load-Config
                             <Path Data="{StaticResource IconShield}" Fill="White" Stretch="Uniform" Width="20" Height="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-                            <TextBlock Text="PolinRider" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
+                            <TextBlock Text="PolinRider" FontFamily="Consolas" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
                             <TextBlock Text="Monitor" FontSize="11" Foreground="{StaticResource TextSec}"/>
                         </StackPanel>
                     </StackPanel>
@@ -345,8 +345,8 @@ $global:config = Load-Config
 
                 <!-- Page title -->
                 <StackPanel Grid.Row="0" Margin="0,0,0,20">
-                    <TextBlock Text="Dashboard" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
-                    <TextBlock Name="DashSubtitle" Text="Scan summary and quick actions" FontSize="12" Foreground="{StaticResource TextSec}" Margin="0,4,0,0"/>
+                    <TextBlock Text="Dashboard" FontFamily="Consolas" FontSize="28" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
+                    <TextBlock Name="DashSubtitle" Text="Scan summary and quick actions" FontSize="12" Foreground="{StaticResource TextSec}" Margin="0,6,0,0"/>
                 </StackPanel>
 
                 <!-- Stats cards -->
@@ -385,7 +385,7 @@ $global:config = Load-Config
 
                 <!-- Buttons + progress -->
                 <StackPanel Grid.Row="2" Margin="0,0,0,20">
-                    <StackPanel Orientation="Horizontal">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Name="BtnScan" Style="{StaticResource PrimaryButton}" Margin="0,0,10,0">
                             <StackPanel Orientation="Horizontal">
                                 <Path Data="{StaticResource IconSearch}" Style="{StaticResource IconBtn}"/>
@@ -400,8 +400,8 @@ $global:config = Load-Config
                         </Button>
                         <Button Name="BtnClean" Style="{StaticResource WarningButton}" IsEnabled="False">
                             <StackPanel Orientation="Horizontal">
-                                <Path Data="{StaticResource IconBroom}" Style="{StaticResource IconBtn}"/>
-                                <TextBlock Text="Clean Infections" VerticalAlignment="Center"/>
+                                <Path Data="{StaticResource IconShield}" Style="{StaticResource IconBtn}"/>
+                                <TextBlock Text="Secure Machine" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                     </StackPanel>
@@ -567,7 +567,7 @@ $global:config = Load-Config
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" Margin="0,0,0,16">
-                    <TextBlock Text="Logs" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
+                    <TextBlock Text="Logs" FontFamily="Consolas" FontSize="28" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
                     <TextBlock Text="Live scan output and history" FontSize="12" Foreground="{StaticResource TextSec}" Margin="0,4,0,0"/>
                 </StackPanel>
 
@@ -653,7 +653,7 @@ $global:config = Load-Config
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" Margin="0,0,0,20">
-                    <TextBlock Text="Settings" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
+                    <TextBlock Text="Settings" FontFamily="Consolas" FontSize="28" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
                     <TextBlock Text="Configure scan paths and behaviour" FontSize="12" Foreground="{StaticResource TextSec}" Margin="0,4,0,0"/>
                 </StackPanel>
 
@@ -745,7 +745,7 @@ $global:config = Load-Config
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" Margin="0,0,0,20">
-                    <TextBlock Text="About" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
+                    <TextBlock Text="About" FontFamily="Consolas" FontSize="28" FontWeight="Bold" Foreground="{StaticResource TextPri}"/>
                     <TextBlock Text="Project info, links, credits" FontSize="12" Foreground="{StaticResource TextSec}" Margin="0,4,0,0"/>
                 </StackPanel>
 
