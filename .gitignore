@@ -1,0 +1,15 @@
+# Runtime/state files - not for source control
+config.json
+history.json
+monitor.log
+smtp.cred.xml
+
+# Shortcuts
+*.lnk
+
+# Editor / OS
+.vs/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
