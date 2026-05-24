@@ -24,9 +24,11 @@ PolinRider Monitor scans for the malware's unique fingerprints, identifies and k
 - It does not modify your firewall (we recommend doing that manually — see Hardening below).
 - It does not send data to anyone. Everything runs locally.
 
-## Screenshots
+## Live scan logs
 
-*(Add your screenshots to `docs/screenshots/` and link them here.)*
+Matrix-styled terminal shows the folder and file currently being scanned in real time, plus a running count of files scanned.
+
+![Logs page](docs/screenshots/logs.png)
 
 ## Install
 
