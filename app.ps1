@@ -873,11 +873,13 @@ function Save-History($entry) {
         Infected      = [int]$entry.Infected
         Procs         = [int]$entry.Procs
         C2            = [int]$entry.C2
+        BatDroppers   = [int]$entry.BatDroppers
         Duration      = "$($entry.Duration)"
         Result        = "$($entry.Result)"
         InfectedFiles = @($entry.InfectedFiles)
         ProcIds       = @($entry.ProcIds)
         C2Hits        = @($entry.C2Hits)
+        BatFiles      = @($entry.BatFiles)
     }
     $hist = @(Load-History)
     $hist = @($obj) + $hist
@@ -899,8 +901,9 @@ function Refresh-Dashboard {
             $infected = [int]$latest.Infected
             $procs    = [int]$latest.Procs
             $c2       = [int]$latest.C2
+            $bats     = [int]$latest.BatDroppers
             $files    = [int]$latest.Files
-            $isClean  = ($infected -eq 0 -and $procs -eq 0 -and $c2 -eq 0)
+            $isClean  = ($infected -eq 0 -and $procs -eq 0 -and $c2 -eq 0 -and $bats -eq 0)
             if ($isClean) {
                 $ui.DashSubtitle.Text = "Last scan: $($latest.Result)  -  $($latest.When)  -  $files files in $($latest.Duration)"
             } else {
@@ -1027,7 +1030,7 @@ function Run-Scan {
             }
         }
 
-        $procIds = @(); $c2Hits = @()
+        $procIds = @(); $c2Hits = @(); $batFiles = @()
         if (-not $cancelled) {
             L "=== process scan ==="
             $evalMarker = -join ([char[]]@(103,108,111,98,97,108,91))
@@ -1042,10 +1045,29 @@ function Run-Scan {
                 foreach ($cn in $conns) { $c2Hits += "$ip <- PID $($cn.OwningProcess)"; L ("   [CONN] {0}" -f $c2Hits[-1]) }
             }
             if ($c2Hits.Count -eq 0) { L "no active C2 connections" }
+
+            L "=== bat dropper scan (temp_auto_push.bat signature) ==="
+            foreach ($path in $scanPaths) {
+                if ($scanState.Cancelled) { break }
+                if (-not (Test-Path $path)) { continue }
+                $bats = Get-ChildItem -Path $path -Recurse -Force -Filter "*.bat" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Length -lt 100000 -and $_.FullName -notmatch '\\node_modules\\' }
+                foreach ($b in $bats) {
+                    try {
+                        $bc = Get-Content -LiteralPath $b.FullName -Raw -ErrorAction Stop
+                        if (-not $bc) { continue }
+                        if ($bc -match 'commit --amend' -and $bc -match 'git push' -and $bc -match '--no-verify' -and $bc -match 'date %') {
+                            $batFiles += $b.FullName
+                            L ("   [BAT] {0}  <-- DROPPER" -f $b.FullName)
+                        }
+                    } catch { }
+                }
+            }
+            if ($batFiles.Count -eq 0) { L "no .bat droppers found" }
         }
 
         $elapsed = (Get-Date) - $start
-        $result = if ($cancelled) { 'STOPPED' } elseif ($infectedFiles.Count -eq 0 -and $procIds.Count -eq 0 -and $c2Hits.Count -eq 0) { 'CLEAN' } else { 'INFECTED' }
+        $result = if ($cancelled) { 'STOPPED' } elseif ($infectedFiles.Count -eq 0 -and $procIds.Count -eq 0 -and $c2Hits.Count -eq 0 -and $batFiles.Count -eq 0) { 'CLEAN' } else { 'INFECTED' }
         L ""
         L ("=== scan {0}: {1} files in {2:N1}s ===" -f $result.ToLower(), $totalScanned, $elapsed.TotalSeconds)
 
@@ -1055,11 +1077,13 @@ function Run-Scan {
             Infected = $infectedFiles.Count
             Procs    = $procIds.Count
             C2       = $c2Hits.Count
+            BatDroppers = $batFiles.Count
             Duration = ('{0:N1}s' -f $elapsed.TotalSeconds)
             Result   = $result
             InfectedFiles = $infectedFiles
             ProcIds  = $procIds
             C2Hits   = $c2Hits
+            BatFiles = $batFiles
         }
     })
     $global:currentScanPs     = $ps
@@ -1142,18 +1166,45 @@ function Stop-Scan {
     Append-LiveLog ("=== stop requested at {0} ===" -f (Get-Date -Format 'hh:mm:ss tt'))
 }
 
-# === Clean ===
+# Walk parent dirs to find the containing git repo root, or $null
+function Find-GitRoot([string]$path) {
+    $current = if (Test-Path $path -PathType Container) { $path } else { Split-Path $path -Parent }
+    while ($current) {
+        if (Test-Path (Join-Path $current '.git')) { return $current }
+        $next = Split-Path $current -Parent
+        if (-not $next -or $next -eq $current) { return $null }
+        $current = $next
+    }
+    return $null
+}
+
+# Append *.bat (with a labelled comment) to repo's .gitignore if not already excluded
+function Ensure-BatGitignore([string]$repoRoot) {
+    $gi = Join-Path $repoRoot '.gitignore'
+    if (Test-Path $gi) {
+        $content = Get-Content -LiteralPath $gi -Raw -ErrorAction SilentlyContinue
+        if ($content -match '(?m)^\s*\*\.bat\s*$') { return $false }   # already there
+    } else {
+        $content = ""
+    }
+    $append = "`r`n# Block .bat files (PolinRider dropper protection)`r`n*.bat`r`n"
+    Add-Content -LiteralPath $gi -Value $append -Encoding utf8
+    return $true
+}
+
+# === Clean / Secure Machine ===
 function Clean-Infections {
     $hist = @(Load-History)
     if ($hist.Count -eq 0) { return }
     $latest = $hist[0]
-    $cleaned = 0; $failed = 0; $killed = 0
+    $cleaned = 0; $failed = 0; $killed = 0; $batsRemoved = 0; $gitignoresUpdated = 0
 
     # @() forces array, even when JSON deserialised to a single string/value
     $files = @($latest.InfectedFiles | Where-Object { $_ })
     $pids  = @($latest.ProcIds       | Where-Object { $_ })
+    $bats  = @($latest.BatFiles      | Where-Object { $_ })
 
-    Append-LiveLog ("{0} [clean] starting - {1} file(s), {2} process(es)" -f (Get-Date -Format 'hh:mm:ss tt'), $files.Count, $pids.Count)
+    Append-LiveLog ("{0} [secure] starting - {1} file(s), {2} process(es), {3} bat dropper(s)" -f (Get-Date -Format 'hh:mm:ss tt'), $files.Count, $pids.Count, $bats.Count)
 
     foreach ($f in $files) {
         if (-not (Test-Path $f)) {
@@ -1184,28 +1235,57 @@ function Clean-Infections {
             Append-LiveLog ("{0} [err] could not kill PID {1}: {2}" -f (Get-Date -Format 'hh:mm:ss tt'), $pidVal, $_.Exception.Message)
         }
     }
+    # Delete .bat droppers and update .gitignore in any containing git repo
+    foreach ($bf in $bats) {
+        if (-not (Test-Path $bf)) {
+            Append-LiveLog ("{0} [skip bat] not found: {1}" -f (Get-Date -Format 'hh:mm:ss tt'), $bf)
+            continue
+        }
+        try {
+            $repoRoot = Find-GitRoot $bf
+            Remove-Item -LiteralPath $bf -Force -ErrorAction Stop
+            $batsRemoved++
+            Append-LiveLog ("{0} [del bat] {1}" -f (Get-Date -Format 'hh:mm:ss tt'), $bf)
+            if ($repoRoot) {
+                $updated = Ensure-BatGitignore $repoRoot
+                if ($updated) {
+                    $gitignoresUpdated++
+                    Append-LiveLog ("{0} [gitignore] added *.bat to {1}\.gitignore" -f (Get-Date -Format 'hh:mm:ss tt'), $repoRoot)
+                }
+            }
+        } catch {
+            $failed++
+            Append-LiveLog ("{0} [err] could not delete {1}: {2}" -f (Get-Date -Format 'hh:mm:ss tt'), $bf, $_.Exception.Message)
+        }
+    }
 
     # Mark this scan as cleaned in history so the dashboard reflects it
-    if ($cleaned -gt 0 -or $killed -gt 0) {
+    if ($cleaned -gt 0 -or $killed -gt 0 -or $batsRemoved -gt 0) {
         $hist[0].Result        = 'CLEAN'
         $hist[0].Infected      = 0
         $hist[0].Procs         = 0
         $hist[0].C2            = 0
+        $hist[0].BatDroppers   = 0
         $hist[0].InfectedFiles = @()
         $hist[0].ProcIds       = @()
         $hist[0].C2Hits        = @()
+        $hist[0].BatFiles      = @()
         $json = ConvertTo-Json -InputObject @($hist) -Depth 6
         Set-Content -LiteralPath $historyFile -Value $json -Encoding utf8
     }
 
-    Write-File-Log "Clean: $cleaned files cleaned, $killed processes killed, $failed failures"
-    Append-LiveLog ("{0} [clean] done - {1} files cleaned, {2} processes killed, {3} failures" -f (Get-Date -Format 'hh:mm:ss tt'), $cleaned, $killed, $failed)
+    Write-File-Log "Secure: $cleaned files cleaned, $killed processes killed, $batsRemoved bat droppers deleted, $gitignoresUpdated .gitignore(s) updated, $failed failures"
+    Append-LiveLog ("{0} [secure] done - {1} files cleaned, {2} processes killed, {3} bat droppers deleted, {4} .gitignore(s) updated, {5} failures" -f (Get-Date -Format 'hh:mm:ss tt'), $cleaned, $killed, $batsRemoved, $gitignoresUpdated, $failed)
 
     Refresh-Dashboard
 
-    $msg = "Cleaned $cleaned local file(s)" + $(if ($killed -gt 0) { ", killed $killed malicious process(es)" } else { "" }) + ".`n`nNOTE: this fixes LOCAL files only. For any cleaned file in a git repo, run 'git add . && git commit && git push' to fix the remote."
-    if ($failed -gt 0) { $msg += "`n`n$failed file(s) could not be processed (see Logs)." }
-    [System.Windows.MessageBox]::Show($msg, "Cleanup complete", "OK", "Information") | Out-Null
+    $msg = "Cleaned $cleaned local file(s)"
+    if ($killed -gt 0)            { $msg += ", killed $killed malicious process(es)" }
+    if ($batsRemoved -gt 0)       { $msg += ", deleted $batsRemoved .bat dropper(s)" }
+    if ($gitignoresUpdated -gt 0) { $msg += ", updated $gitignoresUpdated .gitignore file(s)" }
+    $msg += ".`n`nNOTE: this fixes LOCAL files only. For any cleaned/deleted file in a git repo, run 'git add . && git commit && git push' to fix the remote."
+    if ($failed -gt 0) { $msg += "`n`n$failed item(s) could not be processed (see Logs)." }
+    [System.Windows.MessageBox]::Show($msg, "Secure Machine complete", "OK", "Information") | Out-Null
 }
 
 # === Settings ===
