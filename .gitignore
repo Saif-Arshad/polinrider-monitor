@@ -1,8 +1,13 @@
-﻿# Runtime/state files - not for source control
+# Runtime/state files - not for source control
 config.json
 history.json
 monitor.log
 smtp.cred.xml
+
+# Block any .bat files - prevents accidentally committing PolinRider's
+# temp_auto_push.bat dropper or any other batch script
+*.bat
+config.bat
 
 # Shortcuts
 *.lnk
